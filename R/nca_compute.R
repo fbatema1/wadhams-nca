@@ -24,7 +24,10 @@ NCA_PARAMS <- c(
   "clast.obs",       # last observed conc
   "auclast",         # AUC to last measurable
   "aucinf.obs",      # AUC extrapolated to infinity (observed)
+  "aucpext.obs",     # % of AUCinf that is extrapolated (acceptance criterion)
   "half.life",       # terminal half-life
+  "lambda.z",        # terminal elimination rate constant
+  "adj.r.squared",   # adjusted R² of the lambda_z terminal fit (acceptance criterion)
   "cl.obs",          # clearance (dose / AUCinf)
   "vss.obs",         # volume of distribution at steady state
   "vz.obs",          # terminal volume of distribution
@@ -34,17 +37,20 @@ NCA_PARAMS <- c(
 # Friendly labels + the standardised unit each parameter comes out in,
 # given the hours / ng·mL⁻¹ / ng basis (see nca_units.R::nca_basis_label).
 NCA_PARAM_META <- list(
-  cmax       = list(label = "Cmax",        unit = "ng/mL"),
-  tmax       = list(label = "Tmax",        unit = "h"),
-  tlast      = list(label = "Tlast",       unit = "h"),
-  clast.obs  = list(label = "Clast",       unit = "ng/mL"),
-  auclast    = list(label = "AUClast",     unit = "ng·h/mL"),
-  aucinf.obs = list(label = "AUCinf",      unit = "ng·h/mL"),
-  half.life  = list(label = "t½",          unit = "h"),
-  cl.obs     = list(label = "CL",          unit = "mL/h"),
-  vss.obs    = list(label = "Vss",         unit = "mL"),
-  vz.obs     = list(label = "Vz",          unit = "mL"),
-  mrt.obs    = list(label = "MRT",         unit = "h")
+  cmax          = list(label = "Cmax",         unit = "ng/mL"),
+  tmax          = list(label = "Tmax",         unit = "h"),
+  tlast         = list(label = "Tlast",        unit = "h"),
+  clast.obs     = list(label = "Clast",        unit = "ng/mL"),
+  auclast       = list(label = "AUClast",      unit = "ng·h/mL"),
+  aucinf.obs    = list(label = "AUCinf",       unit = "ng·h/mL"),
+  aucpext.obs   = list(label = "AUC %extrap",  unit = "%"),
+  half.life     = list(label = "t½",           unit = "h"),
+  lambda.z      = list(label = "λz",       unit = "1/h"),
+  adj.r.squared = list(label = "Adj. R²",      unit = "—"),
+  cl.obs        = list(label = "CL",           unit = "mL/h"),
+  vss.obs       = list(label = "Vss",          unit = "mL"),
+  vz.obs        = list(label = "Vz",           unit = "mL"),
+  mrt.obs       = list(label = "MRT",          unit = "h")
 )
 
 # ── Run NCA ───────────────────────────────────────────────────────────────────
@@ -105,7 +111,28 @@ run_nca <- function(formatted) {
   res <- suppressWarnings(PKNCA::pk.nca(data_obj))
 
   tidy <- .tidy_nca_results(res)
-  list(results = tidy, raw = res, messages = msgs)
+  list(results = tidy, raw = res, messages = msgs,
+       annot = .nca_annotations(res))
+}
+
+# ── Per-subject values needed to annotate conc-time plots ─────────────────────
+# Returns one row per ID with: cmax, tmax (to mark the peak) and the terminal
+# lambda_z fit (lambda.z, clast.pred, lambda.z.time.first/last) so the UI can
+# overlay the elimination-phase regression line. NA where not estimable.
+.nca_annotations <- function(res) {
+  long <- as.data.frame(res$result, stringsAsFactors = FALSE)
+  pcol <- intersect(c("PPTESTCD", "ppt", "parameter"), names(long))[1]
+  vcol <- intersect(c("PPORRES", "ppx", "value"),      names(long))[1]
+  if (is.na(pcol) || is.na(vcol)) {
+    pcol <- names(long)[ncol(long) - 1]; vcol <- names(long)[ncol(long)]
+  }
+  want <- c("cmax", "tmax", "lambda.z", "clast.pred",
+            "lambda.z.time.first", "lambda.z.time.last")
+  sub <- long[long[[pcol]] %in% want, c("ID", pcol, vcol), drop = FALSE]
+  if (nrow(sub) == 0) return(data.frame(ID = unique(long$ID)))
+  wide <- reshape(sub, idvar = "ID", timevar = pcol, direction = "wide")
+  names(wide) <- sub(paste0("^", vcol, "\\."), "", names(wide))
+  wide
 }
 
 # ── Reshape PKNCAresults into a subject × parameter table ─────────────────────
