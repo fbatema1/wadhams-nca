@@ -70,6 +70,10 @@ run_nca <- function(formatted) {
   # Drop NA concentrations (e.g. excluded BLQ) so PKNCA doesn't choke
   obs <- obs[!is.na(obs$CONC), , drop = FALSE]
 
+  # Keep the MEASURED observations (before any C0 back-extrapolation below) so
+  # Cmax/Tmax can be reported as OBSERVED values, not the back-extrapolated C0.
+  obs_measured <- obs
+
   msgs <- character(0)
 
   # Map our route strings to PKNCA's expectation ("intravascular"/"extravascular")
@@ -110,9 +114,30 @@ run_nca <- function(formatted) {
 
   res <- suppressWarnings(PKNCA::pk.nca(data_obj))
 
+  # PKNCA computes Cmax on the data it is given, which for IV bolus includes the
+  # back-extrapolated C0 — inflating Cmax to a non-observed value at t=0. Override
+  # Cmax/Tmax with the OBSERVED maximum measured concentration.
+  res$result <- .observed_cmax_override(
+    as.data.frame(res$result, stringsAsFactors = FALSE), obs_measured)
+
   tidy <- .tidy_nca_results(res)
   list(results = tidy, raw = res, messages = msgs,
        annot = .nca_annotations(res))
+}
+
+# ── Replace Cmax/Tmax with the OBSERVED max (not back-extrapolated C0) ─────────
+.observed_cmax_override <- function(long, obs_measured) {
+  pcol <- intersect(c("PPTESTCD", "ppt", "parameter"), names(long))[1]
+  vcol <- intersect(c("PPORRES", "ppx", "value"),      names(long))[1]
+  if (is.na(pcol) || is.na(vcol)) return(long)
+  for (sid in unique(obs_measured$ID)) {
+    s <- obs_measured[obs_measured$ID == sid & !is.na(obs_measured$CONC), , drop = FALSE]
+    if (nrow(s) == 0) next
+    i <- which.max(s$CONC)
+    long[long$ID == sid & long[[pcol]] == "cmax", vcol] <- s$CONC[i]
+    long[long$ID == sid & long[[pcol]] == "tmax", vcol] <- s$TIME[i]
+  }
+  long
 }
 
 # ── Per-subject values needed to annotate conc-time plots ─────────────────────
